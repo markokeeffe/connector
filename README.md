@@ -14,10 +14,7 @@ A lightweight Go server that we can use to query databases for integration.
 
 #### Run as Service
 
-Install the service:
-```bash
-    sudo connector -service install
-```
+Install the service: `sudo connector -service install`
 
 Start the service:
 ```bash
