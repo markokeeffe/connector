@@ -51,7 +51,7 @@ Uninstall the service: `sudo connector.exe -service uninstall`
 Ensure the service is running. Make a POST to the "/task" endpoint with a JSON payload e.g.
 
 ```bash
-    curl -X POST -H "Cache-Control: no-cache" -d '{
+    curl -X POST -d '{
     	"id": "573a6ec5cd45b",
     	"type": "mssql.query",
     	"config": {
