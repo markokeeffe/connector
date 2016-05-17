@@ -2,7 +2,7 @@
 A lightweight Go server that we can use to query databases for integration.
 
 
-## Usage
+## Installation
 
 ### Linux / OSX
 
@@ -73,4 +73,21 @@ Restart the service:
 Uninstall the service:
 ```bash
     sudo connector.exe -service uninstall
+```
+
+
+## Usage
+
+Ensure the service is running. Make a POST to the "/task" endpoint with a JSON payload e.g.
+
+```bash
+    curl -X POST -H "Cache-Control: no-cache" -H "Postman-Token: c6ba4ea6-b0ed-3c79-c438-710306dd3299" -d '{
+    	"id": "573a6ec5cd45b",
+    	"type": "mssql.query",
+    	"config": {
+    		"type": "mssql",
+    		"dsn": "server=192.168.1.23;user id=sa;password=#SAPassword!;database=testing"
+    	},
+    	"payload": "SELECT * FROM dbo.users"
+    }' "https://127.0.0.1:8081/task"
 ```
