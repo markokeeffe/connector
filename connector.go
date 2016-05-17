@@ -53,12 +53,12 @@ type Task struct {
 /**
 Config for a DB task to initialise the DB connection
 */
-type DBTaskConfig struct {
+type TaskDbConfig struct {
 	Type string `json:"type"`
 	Dsn  string `json:"dsn"`
 }
 
-type DBExecResult struct {
+type DbExecResult struct {
 	LastInsertId int64 `json:"last_insert_id"`
 	RowsAffected int64 `json:"rows_affected"`
 }
@@ -72,7 +72,7 @@ type JsonResponse struct {
 }
 
 /**
-Fetch a pending task from the API and populate a Task from the JSON response
+Populate Task struct from the JSON request
 */
 func parseTask(data []byte) (Task, error) {
 
@@ -92,8 +92,8 @@ func parseTask(data []byte) (Task, error) {
 /**
 Get DB specific config to initialise a database connection
 */
-func getDbTaskConfig(task Task) DBTaskConfig {
-	var dbConfig DBTaskConfig
+func getTaskDbConfig(task Task) TaskDbConfig {
+	var dbConfig TaskDbConfig
 	err := json.Unmarshal(task.RawConfig, &dbConfig)
 	errCheck(err)
 	fmt.Print("Database Configuration: ")
@@ -107,7 +107,7 @@ Initialise database connection based on the task type
 */
 func initDbConnection(task Task) *sql.DB {
 	fmt.Println("Initilising Database Connection...")
-	config := getDbTaskConfig(task)
+	config := getTaskDbConfig(task)
 	db, err := sql.Open(config.Type, config.Dsn)
 	errCheck(err)
 
@@ -139,7 +139,7 @@ func processDbQuery(task Task) (interface{}, error) {
 /**
 Open a DB connection, execute a query and POST the result back to the API
 */
-func processDbExec(task Task) (DBExecResult, error) {
+func processDbExec(task Task) (DbExecResult, error) {
 
 	fmt.Print("Executing statement: ")
 	fmt.Println(task.Payload)
@@ -148,7 +148,7 @@ func processDbExec(task Task) (DBExecResult, error) {
 	db.SetMaxIdleConns(100)
 	defer db.Close()
 
-	var response DBExecResult
+	var response DbExecResult
 
 	result, err := db.Exec(task.Payload)
 	if err != nil {
@@ -157,7 +157,7 @@ func processDbExec(task Task) (DBExecResult, error) {
 	lastInsertId, _ := result.LastInsertId()
 	rowsAffected, _ := result.RowsAffected()
 
-	response = DBExecResult{
+	response = DbExecResult{
 		LastInsertId: lastInsertId,
 		RowsAffected: rowsAffected,
 	}
@@ -297,6 +297,7 @@ func (p *Program) Stop(s service.Service) error {
 	// Stop should not block. Return with a few seconds.
 	return nil
 }
+
 func main() {
 
 	svcConfig := &service.Config{
