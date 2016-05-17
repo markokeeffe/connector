@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	HOST = "connector.test"
+	HOST = "127.0.0.1"
 	PORT = "8081"
 	TASK_TYPE_DB_MYSQL_QUERY = "mysql.query"
 	TASK_TYPE_DB_MYSQL_EXEC  = "mysql.exec"
