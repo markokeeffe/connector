@@ -16,25 +16,13 @@ A lightweight Go server that we can use to query databases for integration.
 
 Install the service: `sudo connector -service install`
 
-Start the service:
-```bash
-    sudo connector -service start
-```
+Start the service: `sudo connector -service start`
 
-Stop the service:
-```bash
-    sudo connector -service stop
-```
+Stop the service: `sudo connector -service stop`
 
-Restart the service:
-```bash
-    sudo connector -service restart
-```
+Restart the service: `sudo connector -service restart`
 
-Uninstall the service:
-```bash
-    sudo connector -service uninstall
-```
+Uninstall the service: `sudo connector -service uninstall`
 
 
 ### Windows
@@ -47,30 +35,15 @@ Uninstall the service:
 
 #### Run as Service
 
-Install the service:
-```bash
-    sudo connector.exe -service install
-```
+Install the service: `sudo connector.exe -service install`
 
-Start the service:
-```bash
-    sudo connector.exe -service start
-```
+Start the service: `sudo connector.exe -service start`
 
-Stop the service:
-```bash
-    sudo connector.exe -service stop
-```
+Stop the service: `sudo connector.exe -service stop`
 
-Restart the service:
-```bash
-    sudo connector.exe -service restart
-```
+Restart the service: `sudo connector.exe -service restart`
 
-Uninstall the service:
-```bash
-    sudo connector.exe -service uninstall
-```
+Uninstall the service: `sudo connector.exe -service uninstall`
 
 
 ## Usage
