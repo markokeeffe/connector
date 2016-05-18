@@ -8,18 +8,24 @@ import (
 	_ "github.com/denisenkom/go-mssqldb"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/kardianos/service"
-	"github.com/kabukky/httpscerts"
 	"io"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"os/exec"
 	"github.com/markokeeffe/mapquery"
+	"github.com/kabukky/httpscerts"
+	"os"
+	"path"
+	"runtime"
+	"strings"
+	"encoding/base64"
 )
 
 const (
 	HOST = "127.0.0.1"
 	PORT = "8081"
+	AUTH_USER = "digistormconnector"
 	TASK_TYPE_DB_MYSQL_QUERY = "mysql.query"
 	TASK_TYPE_DB_MYSQL_EXEC  = "mysql.exec"
 	TASK_TYPE_DB_MSSQL_QUERY = "mssql.query"
@@ -27,9 +33,16 @@ const (
 )
 
 var (
+	svcFlag	string // Service control flag e.g. "start" "stop" "uninstall"...
 	svcLogger service.Logger // logger for the service
+	config    Config
 )
 
+type Config struct {
+	ApiKey	string `json:"key"`
+	Host	string `json:"host"`
+	Port	string `json:"port"`
+}
 
 /**
 Container for the executable program that can be run as a service
@@ -69,6 +82,61 @@ Used to return responses to the task server e.g. `{"type": "error", "body": "Inv
 type JsonResponse struct {
 	Type string      `json:"type"`
 	Body interface{} `json:"body"`
+}
+
+/**
+Read in configuration from a JSON config file - this can be overridden by command line arguments.
+If any config is overridden, the `config.json` file is updated.
+*/
+func loadConfiguration() error {
+	apiKey := flag.String("key", "", "Digistorm API Key.")
+	host := flag.String("host", HOST, "Host name for this server e.g. '184.33.65.12' or 'digistorm.myschool.qld.edu.au'")
+	port := flag.String("port", PORT, "Port number for tist server. Must be open to incoming requests at the firewall. e.g. 8081")
+	flag.StringVar(&svcFlag, "service", "", "Control the system service.")
+
+	flag.Parse()
+
+	_, filename, _, _ := runtime.Caller(1)
+	configFilePath := path.Join(path.Dir(filename), "conf.json")
+	fmt.Println(configFilePath)
+
+	file, err := os.Open(configFilePath)
+	if err != nil {
+		panic(err)
+	}
+	decoder := json.NewDecoder(file)
+	err = decoder.Decode(&config)
+	if err != nil {
+		panic(err)
+	}
+
+	var configChanged bool = false
+
+	if config.ApiKey == "" {
+		config.ApiKey = *apiKey
+		configChanged = true
+	}
+	if config.Host == "" {
+		config.Host = *host
+		configChanged = true
+	}
+	if config.Port == "" {
+		config.Port = *port
+		configChanged = true
+	}
+
+	if configChanged == true {
+		configData, err := json.Marshal(config)
+		if err != nil {
+			panic(err)
+		}
+		err = ioutil.WriteFile(configFilePath, configData, 0644)
+		if err != nil {
+			panic(err)
+		}
+	}
+
+	return nil
 }
 
 /**
@@ -206,6 +274,30 @@ func processTaskRequest(r *http.Request) (interface{}, error) {
 	return response, err
 }
 
+func checkAuth(w http.ResponseWriter, r *http.Request) bool {
+	s := strings.SplitN(r.Header.Get("Authorization"), " ", 2)
+	if len(s) != 2 { return false }
+
+	b, err := base64.StdEncoding.DecodeString(s[1])
+	if err != nil { return false }
+
+	pair := strings.SplitN(string(b), ":", 2)
+	if len(pair) != 2 { return false }
+
+	return pair[0] == AUTH_USER && pair[1] == config.ApiKey
+}
+
+func handleAuthMiddleware (w http.ResponseWriter, r *http.Request, handler func(http.ResponseWriter, *http.Request)) {
+	if checkAuth(w, r) {
+		handler(w, r)
+		return
+	}
+
+	w.Header().Set("WWW-Authenticate", `Basic realm="MY REALM"`)
+	w.WriteHeader(401)
+	w.Write([]byte("401 Unauthorized\n"))
+}
+
 /**
 Handle an HTTP request to the / URL - display a success message
  */
@@ -274,23 +366,26 @@ func (p *Program) Start(s service.Service) error {
 func (p *Program) run() {
 	svcLogger.Info("Running...")
 
+	serverAddress := fmt.Sprintf("%s:%s", config.Host, config.Port)
+
 	// Check if the cert files are available.
-	err := httpscerts.Check("cert.pem", "key.pem")
+	err := httpscerts.Check("server.cert.pem", "server.key.pem")
 	// If they are not available, generate new ones.
 	if err != nil {
-		err = httpscerts.Generate("cert.pem", "key.pem", fmt.Sprintf("%s:%s", HOST, PORT))
+		err = httpscerts.Generate("server.cert.pem", "server.key.pem", serverAddress)
 		if err != nil {
 			log.Fatal("Error: Couldn't create https certs.")
 		}
-
-		// TODO POST the certs to Digistorm API to be stored against the API user of this exe
-
 	}
 
-	http.HandleFunc("/", handleRoot)
-	http.HandleFunc("/task", handleTask)
-	fmt.Println("Starting server...")
-	http.ListenAndServeTLS(fmt.Sprintf("%s:%s", HOST, PORT), "cert.pem", "key.pem", nil)
+	http.HandleFunc("/", func (w http.ResponseWriter, r *http.Request) {
+		handleAuthMiddleware(w, r, handleRoot)
+	})
+	http.HandleFunc("/task", func (w http.ResponseWriter, r *http.Request) {
+		handleAuthMiddleware(w, r, handleTask)
+	})
+	fmt.Println(fmt.Sprintf("Starting server on address: %s", serverAddress))
+	http.ListenAndServeTLS(serverAddress, "server.cert.pem", "server.key.pem", nil)
 }
 func (p *Program) Stop(s service.Service) error {
 	svcLogger.Info("Stopping...")
@@ -318,12 +413,18 @@ func main() {
 		panic(err)
 	}
 
-	svcFlag := flag.String("service", "", "Control the system service.")
-	flag.Parse()
+	err = loadConfiguration()
+	if err != nil {
+		panic(err)
+	}
 
-	if len(*svcFlag) != 0 {
+	if len(config.ApiKey) == 0 {
+		log.Fatal("API key must be specified e.g. 'connector.exe -key=ABC123'")
+	}
 
-		err := service.Control(s, *svcFlag)
+	if len(svcFlag) != 0 {
+
+		err := service.Control(s, svcFlag)
 		if err != nil {
 			log.Printf("Valid actions: %q\n", service.ControlAction)
 			log.Fatal(err)
