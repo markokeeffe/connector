@@ -60,7 +60,9 @@ Example response:
 "mssql.query"
 "mssql.exec"
 
+
 ## Installation
+
 
 ### Linux / OSX
 
@@ -77,21 +79,22 @@ Example response:
     sudo connector -service install
 
     # Start the service:
-    sudo connector -service start
+    connector -service start
 
     # Stop the service:
-    sudo connector -service stop
+    connector -service stop
 
     # Restart the service:
-    sudo connector -service restart
+    connector -service restart
 
     # Uninstall the service:
     sudo connector -service uninstall
 ```
 
+
 ### Windows
 
-#### Build From Source
+#### Build From Source (from Linux / OSX)
 
 ```bash
     GOOS=windows GOARCH=386 go build -o connector.exe connector.go
@@ -99,15 +102,24 @@ Example response:
 
 #### Run as Service
 
-Install the service: `sudo connector.exe -service install`
+Open a command prompt as Administrator.
 
-Start the service: `sudo connector.exe -service start`
+```bat
+    # Install the service:
+    connector.exe -service install
 
-Stop the service: `sudo connector.exe -service stop`
+    # Start the service:
+    connector.exe -service start
 
-Restart the service: `sudo connector.exe -service restart`
+    # Stop the service:
+    connector.exe -service stop
 
-Uninstall the service: `sudo connector.exe -service uninstall`
+    # Restart the service:
+    connector.exe -service restart
+
+    # Uninstall the service:
+    connector.exe -service uninstall
+```
 
 
 ## Usage
