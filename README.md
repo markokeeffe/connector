@@ -40,11 +40,11 @@ Example response:
             {
                 "email": "test@example.com",
                 "id": "1"
-            }, 
+            },
             {
                 "email": "mark@example.com",
                 "id": "2"
-            }, 
+            },
             {
                 "email": "another@example.com",
                 "id": "3"
@@ -72,16 +72,22 @@ Example response:
 
 #### Run as Service
 
-Install the service: `sudo connector -service install`
+```bash
+    # Install the service:
+    sudo connector -service install
 
-Start the service: `sudo connector -service start`
+    # Start the service:
+    sudo connector -service start
 
-Stop the service: `sudo connector -service stop`
+    # Stop the service:
+    sudo connector -service stop
 
-Restart the service: `sudo connector -service restart`
+    # Restart the service:
+    sudo connector -service restart
 
-Uninstall the service: `sudo connector -service uninstall`
-
+    # Uninstall the service:
+    sudo connector -service uninstall
+```
 
 ### Windows
 
