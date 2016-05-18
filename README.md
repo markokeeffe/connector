@@ -104,7 +104,7 @@ Example response:
 
 Open a command prompt as Administrator.
 
-```bat
+```bash
     # Install the service:
     connector.exe -service install
 
