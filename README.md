@@ -9,10 +9,10 @@ Starts a HTTPS server on a given host and port e.g. https://127.0.0.1:8081 and r
 `/` : [GET] Health check. Responds with a success message if the server is online:
 
 ```json
-    {
-        "type": "success",
-        "body": "Digistorm Connector Online"
-    }
+{
+    "type": "success",
+    "body": "Digistorm Connector Online"
+}
 ```
 
 `/task` : [POST] Perform task. Connects to a database server using provided configuration and performs a query, returning a JSON encoded response.
@@ -20,37 +20,37 @@ Starts a HTTPS server on a given host and port e.g. https://127.0.0.1:8081 and r
 Example request body:
 
 ```json
-    {
-        "id": "573a6ec5cd45b",
-        "type": "mssql.query",
-        "config": {
-            "type": "mssql",
-            "dsn": "server=192.168.1.23;user id=sa;password=#SAPassword!;database=testing"
-        },
-        "payload": "SELECT * FROM dbo.users"
-    }
+{
+    "id": "573a6ec5cd45b",
+    "type": "mssql.query",
+    "config": {
+        "type": "mssql",
+        "dsn": "server=192.168.1.23;user id=sa;password=#SAPassword!;database=testing"
+    },
+    "payload": "SELECT * FROM dbo.users"
+}
 ```
 
 Example response:
 
 ```json
-    {
-    	"type": "success",
-    	"body": [
-            {
-                "email": "test@example.com",
-                "id": "1"
-            }, 
-            {
-                "email": "mark@example.com",
-                "id": "2"
-            }, 
-            {
-                "email": "another@example.com",
-                "id": "3"
-            }
-    	]
-    }
+{
+    "type": "success",
+    "body": [
+        {
+            "email": "test@example.com",
+            "id": "1"
+        },
+        {
+            "email": "mark@example.com",
+            "id": "2"
+        },
+        {
+            "email": "another@example.com",
+            "id": "3"
+        }
+    ]
+}
 ```
 
 **Supported Task Types**
@@ -60,48 +60,66 @@ Example response:
 "mssql.query"
 "mssql.exec"
 
+
 ## Installation
+
 
 ### Linux / OSX
 
 #### Build From Source
 
 ```bash
-    go build connector.go
+go build connector.go
 ```
 
 #### Run as Service
 
-Install the service: `sudo connector -service install`
+```bash
+# Install the service:
+sudo connector -service install
 
-Start the service: `sudo connector -service start`
+# Start the service:
+connector -service start
 
-Stop the service: `sudo connector -service stop`
+# Stop the service:
+connector -service stop
 
-Restart the service: `sudo connector -service restart`
+# Restart the service:
+connector -service restart
 
-Uninstall the service: `sudo connector -service uninstall`
+# Uninstall the service:
+sudo connector -service uninstall
+```
 
 
 ### Windows
 
-#### Build From Source
+#### Build From Source (from Linux / OSX)
 
 ```bash
-    GOOS=windows GOARCH=386 go build -o connector.exe connector.go
+GOOS=windows GOARCH=386 go build -o connector.exe connector.go
 ```
 
 #### Run as Service
 
-Install the service: `sudo connector.exe -service install`
+Open a command prompt as Administrator.
 
-Start the service: `sudo connector.exe -service start`
+```bash
+# Install the service:
+connector.exe -service install
 
-Stop the service: `sudo connector.exe -service stop`
+# Start the service:
+connector.exe -service start
 
-Restart the service: `sudo connector.exe -service restart`
+# Stop the service:
+connector.exe -service stop
 
-Uninstall the service: `sudo connector.exe -service uninstall`
+# Restart the service:
+connector.exe -service restart
+
+# Uninstall the service:
+connector.exe -service uninstall
+```
 
 
 ## Usage
@@ -109,13 +127,13 @@ Uninstall the service: `sudo connector.exe -service uninstall`
 Ensure the service is running. Make a POST to the "/task" endpoint with a JSON payload e.g.
 
 ```bash
-    curl -X POST -d '{
-    	"id": "573a6ec5cd45b",
-    	"type": "mssql.query",
-    	"config": {
-    		"type": "mssql",
-    		"dsn": "server=192.168.1.23;user id=sa;password=#SAPassword!;database=testing"
-    	},
-    	"payload": "SELECT * FROM dbo.users"
-    }' "https://127.0.0.1:8081/task"
+curl -X POST -d '{
+    "id": "573a6ec5cd45b",
+    "type": "mssql.query",
+    "config": {
+        "type": "mssql",
+        "dsn": "server=192.168.1.23;user id=sa;password=#SAPassword!;database=testing"
+    },
+    "payload": "SELECT * FROM dbo.users"
+}' "https://127.0.0.1:8081/task"
 ```
