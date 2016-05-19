@@ -1,31 +1,33 @@
+// A lightweight HTTPS server to act as a connector between a local database and the Digistorm API.
 package main
 
 import (
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	_ "github.com/denisenkom/go-mssqldb"
 	_ "github.com/go-sql-driver/mysql"
+	"github.com/kabukky/httpscerts"
+	"github.com/kardianos/osext"
 	"github.com/kardianos/service"
+	"github.com/markokeeffe/mapquery"
 	"io"
 	"io/ioutil"
 	"log"
 	"net/http"
-	"os/exec"
-	"github.com/markokeeffe/mapquery"
-	"github.com/kabukky/httpscerts"
 	"os"
-	"path"
-	"runtime"
+	"os/exec"
+	"path/filepath"
 	"strings"
-	"encoding/base64"
 )
 
 const (
-	HOST = "127.0.0.1"
-	PORT = "8081"
-	AUTH_USER = "digistormconnector"
+	HOST                     = "127.0.0.1"
+	PORT                     = "8081"
+	AUTH_USER                = "digistormconnector"
 	TASK_TYPE_DB_MYSQL_QUERY = "mysql.query"
 	TASK_TYPE_DB_MYSQL_EXEC  = "mysql.exec"
 	TASK_TYPE_DB_MSSQL_QUERY = "mssql.query"
@@ -33,15 +35,25 @@ const (
 )
 
 var (
-	svcFlag	string // Service control flag e.g. "start" "stop" "uninstall"...
-	svcLogger service.Logger // logger for the service
-	config    Config
+	svcLogger service.Logger  // Will write logs to the Windows event viewer
+	svcFlag   string          // Service control flag e.g. "start" "stop" "uninstall"...
+	config    ConnectorConfig // Config vars
 )
 
-type Config struct {
-	ApiKey	string `json:"key"`
-	Host	string `json:"host"`
-	Port	string `json:"port"`
+/*
+Wrapper for this executable
+*/
+type program struct {
+	exit chan struct{}
+}
+
+/*
+Configuration for this executable
+*/
+type ConnectorConfig struct {
+	ApiKey string `json:"key"`
+	Host   string `json:"host"`
+	Port   string `json:"port"`
 }
 
 /**
@@ -71,6 +83,9 @@ type TaskDbConfig struct {
 	Dsn  string `json:"dsn"`
 }
 
+/*
+A wrapper for the information returned when executing an INSERT/DELETE query
+*/
 type DbExecResult struct {
 	LastInsertId int64 `json:"last_insert_id"`
 	RowsAffected int64 `json:"rows_affected"`
@@ -84,62 +99,110 @@ type JsonResponse struct {
 	Body interface{} `json:"body"`
 }
 
-/**
-Read in configuration from a JSON config file - this can be overridden by command line arguments.
-If any config is overridden, the `config.json` file is updated.
+/*
+Get the correct path to the installed executables config file
 */
-func loadConfiguration() error {
+func getAssetPath(name string) (string, error) {
+	fullexecpath, err := osext.Executable()
+	if err != nil {
+		return "", err
+	}
+
+	dir, _ := filepath.Split(fullexecpath)
+
+	return filepath.Join(dir, name), nil
+}
+
+/*
+Read in configuration from a JSON config file
+*/
+func readConfigFile(configPath string) (connectorConfig ConnectorConfig, err error) {
+
+	file, err := os.Open(configPath)
+	defer file.Close()
+	if err != nil {
+		return connectorConfig, err
+	}
+
+	decoder := json.NewDecoder(file)
+	err = decoder.Decode(&connectorConfig)
+	if err != nil {
+		return connectorConfig, err
+	}
+
+	return connectorConfig, nil
+}
+
+/*
+Write configuration to a JSON config file
+*/
+func writeConfigFile(configPath string) error {
+
+	configData, err := json.Marshal(config)
+	if err != nil {
+		return err
+	}
+
+	err = ioutil.WriteFile(configPath, configData, 0644)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+/*
+Load in command line arguments, and attempt to read configuration from a JSON config file.
+If the file does not exist, it will be created.
+If the user specifies any command line arguments, use them to override the values in the config file,
+and write the changes to the file.
+*/
+func processConfig() error {
+
 	apiKey := flag.String("key", "", "Digistorm API Key.")
 	host := flag.String("host", HOST, "Host name for this server e.g. '184.33.65.12' or 'digistorm.myschool.qld.edu.au'")
-	port := flag.String("port", PORT, "Port number for tist server. Must be open to incoming requests at the firewall. e.g. 8081")
+	port := flag.String("port", PORT, "Port numer for tist server. Must be open to incoming requests at the firewall. e.g. 8081")
 	flag.StringVar(&svcFlag, "service", "", "Control the system service.")
 
 	flag.Parse()
 
-	_, filename, _, _ := runtime.Caller(1)
-	configFilePath := path.Join(path.Dir(filename), "conf.json")
-	fmt.Println(configFilePath)
-
-	file, err := os.Open(configFilePath)
+	configPath, err := getAssetPath("conf.json")
 	if err != nil {
-		panic(err)
-	}
-	decoder := json.NewDecoder(file)
-	err = decoder.Decode(&config)
-	if err != nil {
-		panic(err)
+		return err
 	}
 
-	var configChanged bool = false
+	configUpdate := false
 
-	if config.ApiKey == "" {
+	// Attempt to read config from a file, but do not return an error if it isn't there,
+	// we can write to the file after processing the command line arguments
+	config, err = readConfigFile(configPath)
+	if err != nil {
+		log.Println(err)
+	}
+	if config.ApiKey == "" || (config.ApiKey != *apiKey && *apiKey != "") {
 		config.ApiKey = *apiKey
-		configChanged = true
+		configUpdate = true
 	}
-	if config.Host == "" {
+	if config.Host == "" || (config.Host != *host && *host != HOST) {
 		config.Host = *host
-		configChanged = true
+		configUpdate = true
 	}
-	if config.Port == "" {
+	if config.Port == "" || (config.Port != *port && *port != PORT) {
 		config.Port = *port
-		configChanged = true
+		configUpdate = true
 	}
 
-	if configChanged == true {
-		configData, err := json.Marshal(config)
+	if configUpdate == true {
+		err = writeConfigFile(configPath)
 		if err != nil {
-			panic(err)
-		}
-		err = ioutil.WriteFile(configFilePath, configData, 0644)
-		if err != nil {
-			panic(err)
+			return err
 		}
 	}
 
 	return nil
 }
 
-/**
+/*
 Populate Task struct from the JSON request
 */
 func parseTask(data []byte) (Task, error) {
@@ -157,7 +220,7 @@ func parseTask(data []byte) (Task, error) {
 	return task, err
 }
 
-/**
+/*
 Get DB specific config to initialise a database connection
 */
 func getTaskDbConfig(task Task) TaskDbConfig {
@@ -170,7 +233,7 @@ func getTaskDbConfig(task Task) TaskDbConfig {
 	return dbConfig
 }
 
-/**
+/*
 Initialise database connection based on the task type
 */
 func initDbConnection(task Task) *sql.DB {
@@ -182,7 +245,7 @@ func initDbConnection(task Task) *sql.DB {
 	return db
 }
 
-/**
+/*
 Open a DB connection, execute a query and POST the result back to the API
 */
 func processDbQuery(task Task) (interface{}, error) {
@@ -204,7 +267,7 @@ func processDbQuery(task Task) (interface{}, error) {
 	return mappedRows, err
 }
 
-/**
+/*
 Open a DB connection, execute a query and POST the result back to the API
 */
 func processDbExec(task Task) (DbExecResult, error) {
@@ -233,7 +296,7 @@ func processDbExec(task Task) (DbExecResult, error) {
 	return response, nil
 }
 
-/**
+/*
 Parse HTTP request body for a task - should JSON decode the task and process it based on it's type
 */
 func processTaskRequest(r *http.Request) (interface{}, error) {
@@ -274,20 +337,32 @@ func processTaskRequest(r *http.Request) (interface{}, error) {
 	return response, err
 }
 
+/*
+Get the HTTP basic auth headers and check against the configured username and API key
+*/
 func checkAuth(w http.ResponseWriter, r *http.Request) bool {
 	s := strings.SplitN(r.Header.Get("Authorization"), " ", 2)
-	if len(s) != 2 { return false }
+	if len(s) != 2 {
+		return false
+	}
 
 	b, err := base64.StdEncoding.DecodeString(s[1])
-	if err != nil { return false }
+	if err != nil {
+		return false
+	}
 
 	pair := strings.SplitN(string(b), ":", 2)
-	if len(pair) != 2 { return false }
+	if len(pair) != 2 {
+		return false
+	}
 
 	return pair[0] == AUTH_USER && pair[1] == config.ApiKey
 }
 
-func handleAuthMiddleware (w http.ResponseWriter, r *http.Request, handler func(http.ResponseWriter, *http.Request)) {
+/*
+Wrapper function to handle HTTP requests, checking HTTP basic authorisation credentials
+*/
+func handleAuthMiddleware(w http.ResponseWriter, r *http.Request, handler func(http.ResponseWriter, *http.Request)) {
 	if checkAuth(w, r) {
 		handler(w, r)
 		return
@@ -298,132 +373,158 @@ func handleAuthMiddleware (w http.ResponseWriter, r *http.Request, handler func(
 	w.Write([]byte("401 Unauthorized\n"))
 }
 
-/**
+/*
 Handle an HTTP request to the / URL - display a success message
- */
+*/
 func handleRoot(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-	response := JsonResponse{
+	writeResponse(w, http.StatusOK, JsonResponse{
 		Type: "success",
 		Body: "Digistorm Connector Online",
-	}
-	w.WriteHeader(http.StatusOK)
-	if err := json.NewEncoder(w).Encode(response); err != nil {
-		panic(err)
-	}
+	})
 }
 
-/**
+/*
 Handle an HTTP request to the /task URL - should contain a JSON encoded task in the request body
- */
+*/
 func handleTask(w http.ResponseWriter, r *http.Request) {
-
-	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 
 	rawResponse, err := processTaskRequest(r)
 
 	if err != nil {
-		response := JsonResponse{
+		writeResponse(w, http.StatusInternalServerError, JsonResponse{
 			Type: "error",
 			Body: fmt.Sprintf("%s", err),
-		}
-		w.WriteHeader(http.StatusInternalServerError)
-		if err := json.NewEncoder(w).Encode(response); err != nil {
-			panic(err)
-		}
-	} else {
-		response := JsonResponse{
-			Type: "success",
-			Body: rawResponse,
-		}
-		w.WriteHeader(http.StatusOK)
-		if err := json.NewEncoder(w).Encode(response); err != nil {
-			panic(err)
-		}
+		})
+		return
 	}
+
+	writeResponse(w, http.StatusOK, JsonResponse{
+		Type: "success",
+		Body: rawResponse,
+	})
 
 }
 
-/**
-Handle an error - returns true if error was handled
+func writeResponse (w http.ResponseWriter, status int, response JsonResponse) {
+	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
+	w.WriteHeader(status)
+	err := json.NewEncoder(w).Encode(response)
+	errCheck(err)
+}
+
+/*
+Start listening on the configured address
 */
-func errCheck(err error) bool {
-	if err != nil {
-		fmt.Println(err)
-
-		return true
-	}
-
-	return false
-}
-
-func (p *Program) Start(s service.Service) error {
-	svcLogger.Info("Starting...")
-	// Start should not block. Do the actual work async.
-	go p.run()
-	return nil
-}
-func (p *Program) run() {
-	svcLogger.Info("Running...")
-
+func startServer() {
 	serverAddress := fmt.Sprintf("%s:%s", config.Host, config.Port)
 
+	certPath, err := getAssetPath("server.cert.pem")
+	errCheckFatal(err)
+	keyPath, err := getAssetPath("server.key.pem")
+	errCheckFatal(err)
+
 	// Check if the cert files are available.
-	err := httpscerts.Check("server.cert.pem", "server.key.pem")
+	err = httpscerts.Check(certPath, keyPath)
 	// If they are not available, generate new ones.
 	if err != nil {
-		err = httpscerts.Generate("server.cert.pem", "server.key.pem", serverAddress)
+		err = httpscerts.Generate(certPath, keyPath, serverAddress)
 		if err != nil {
 			log.Fatal("Error: Couldn't create https certs.")
 		}
 	}
 
-	http.HandleFunc("/", func (w http.ResponseWriter, r *http.Request) {
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		handleAuthMiddleware(w, r, handleRoot)
 	})
-	http.HandleFunc("/task", func (w http.ResponseWriter, r *http.Request) {
+	http.HandleFunc("/task", func(w http.ResponseWriter, r *http.Request) {
 		handleAuthMiddleware(w, r, handleTask)
 	})
 	fmt.Println(fmt.Sprintf("Starting server on address: %s", serverAddress))
-	http.ListenAndServeTLS(serverAddress, "server.cert.pem", "server.key.pem", nil)
+	http.ListenAndServeTLS(serverAddress, certPath, keyPath, nil)
 }
-func (p *Program) Stop(s service.Service) error {
-	svcLogger.Info("Stopping...")
-	// Stop should not block. Return with a few seconds.
+
+func (p *program) Start(s service.Service) error {
+	if service.Interactive() {
+		svcLogger.Info("Connector running in terminal.")
+	} else {
+		svcLogger.Info("Connector running under service manager.")
+	}
+	p.exit = make(chan struct{})
+
+	// Start should not block. Do the actual work async.
+	go p.run()
+	return nil
+}
+func (p *program) run() error {
+	svcLogger.Infof("Connector running on platform: %v.", service.Platform())
+	svcLogger.Infof("Config: %v", config)
+
+	// By this point, there should be an API key in the config - show the user an error if it hasn't been provided
+	if len(config.ApiKey) == 0 {
+		errCheckFatal(errors.New("API key must be specified e.g. 'connector.exe -key=ABC123'"))
+	}
+
+	startServer()
+
+	return nil
+}
+func (p *program) Stop(s service.Service) error {
+	// Any work in Stop should be quick, usually a few seconds at most.
+	svcLogger.Info("Connector stopping")
+	close(p.exit)
 	return nil
 }
 
+func errCheck(err error) {
+	if err != nil {
+		svcLogger.Error(err)
+	}
+}
+func errCheckFatal(err error) {
+	if err != nil {
+		svcLogger.Error(err)
+		log.Fatal(err)
+	}
+}
+
+// Service setup.
+//   Define service config.
+//   Create the service.
+//   Setup the logger.
+//   Handle service controls (optional).
+//   Run the service.
 func main() {
 
 	svcConfig := &service.Config{
 		Name:        "DigistormConnector",
 		DisplayName: "Digistorm Connector",
-		Description: "A lightweight server to process queries from Digistorm and return results over HTTP.",
+		Description: "A lightweight HTTPS server to act as a connector between a local database and the Digistorm API.",
 	}
 
-	program := &Program{}
-
-	s, err := service.New(program, svcConfig)
+	prg := &program{}
+	s, err := service.New(prg, svcConfig)
 	if err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
-
-	svcLogger, err = s.Logger(nil)
+	errs := make(chan error, 5)
+	svcLogger, err = s.Logger(errs)
 	if err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
 
-	err = loadConfiguration()
-	if err != nil {
-		panic(err)
-	}
+	go func() {
+		for {
+			err := <-errs
+			if err != nil {
+				log.Print(err)
+			}
+		}
+	}()
 
-	if len(config.ApiKey) == 0 {
-		log.Fatal("API key must be specified e.g. 'connector.exe -key=ABC123'")
-	}
+	err = processConfig()
+	errCheckFatal(err)
 
 	if len(svcFlag) != 0 {
-
 		err := service.Control(s, svcFlag)
 		if err != nil {
 			log.Printf("Valid actions: %q\n", service.ControlAction)
@@ -433,5 +534,5 @@ func main() {
 	}
 
 	err = s.Run()
-	panic(err)
+	errCheckFatal(err)
 }
