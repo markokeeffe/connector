@@ -10,7 +10,6 @@ import (
 	"fmt"
 	_ "github.com/denisenkom/go-mssqldb"
 	_ "github.com/go-sql-driver/mysql"
-	"github.com/kabukky/httpscerts"
 	"github.com/kardianos/osext"
 	"github.com/kardianos/service"
 	"github.com/markokeeffe/mapquery"
@@ -22,6 +21,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"crypto/x509"
+	"encoding/pem"
+	"crypto/x509/pkix"
+	"math/big"
+	"time"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/ecdsa"
 )
 
 const (
@@ -412,35 +419,152 @@ func writeResponse (w http.ResponseWriter, status int, response JsonResponse) {
 	errCheck(err)
 }
 
+func publicKey(priv interface{}) interface{} {
+	switch k := priv.(type) {
+	case *rsa.PrivateKey:
+		return &k.PublicKey
+	case *ecdsa.PrivateKey:
+		return &k.PublicKey
+	default:
+		return nil
+	}
+}
+func pemBlockForKey(priv interface{}) *pem.Block {
+	switch k := priv.(type) {
+	case *rsa.PrivateKey:
+		return &pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(k)}
+	case *ecdsa.PrivateKey:
+		b, err := x509.MarshalECPrivateKey(k)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Unable to marshal ECDSA private key: %v", err)
+			os.Exit(2)
+		}
+		return &pem.Block{Type: "EC PRIVATE KEY", Bytes: b}
+	default:
+		return nil
+	}
+}
+
 /*
 Start listening on the configured address
 */
 func startServer() {
 	serverAddress := fmt.Sprintf("%s:%s", config.Host, config.Port)
 
-	certPath, err := getAssetPath("server.cert.pem")
+	caCertPath, err := getAssetPath("certs/ca/ca.crt")
 	errCheckFatal(err)
-	keyPath, err := getAssetPath("server.key.pem")
+	certPath, err := getAssetPath("certs/server/server.crt")
+	errCheckFatal(err)
+	keyPath, err := getAssetPath("certs/server/server.key")
 	errCheckFatal(err)
 
-	// Check if the cert files are available.
-	err = httpscerts.Check(certPath, keyPath)
-	// If they are not available, generate new ones.
+	// Load CA cert
+	caCert, err := ioutil.ReadFile(caCertPath)
 	if err != nil {
-		err = httpscerts.Generate(certPath, keyPath, serverAddress)
-		if err != nil {
-			log.Fatal("Error: Couldn't create https certs.")
-		}
+		log.Fatal(err)
+	}
+	//
+	//cert, err := ioutil.ReadFile(certPath)
+	//if err != nil {
+	//	log.Fatal(err)
+	//}
+
+	var block *pem.Block
+	block, _ = pem.Decode(caCert)
+
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		log.Fatal(err)
 	}
 
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		handleAuthMiddleware(w, r, handleRoot)
-	})
-	http.HandleFunc("/task", func(w http.ResponseWriter, r *http.Request) {
-		handleAuthMiddleware(w, r, handleTask)
-	})
-	fmt.Println(fmt.Sprintf("Starting server on address: %s", serverAddress))
-	http.ListenAndServeTLS(serverAddress, certPath, keyPath, nil)
+	fmt.Println(string(cert.Signature))
+
+	//fmt.Println(cert)
+
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	notBefore := time.Now()
+	notAfter := notBefore.Add(365 * 24 * time.Hour)
+
+	serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)
+	serialNumber, err := rand.Int(rand.Reader, serialNumberLimit)
+	if err != nil {
+		log.Printf("failed to generate serial number: %s", err)
+		log.Fatal(err)
+	}
+	template := x509.Certificate{
+		SerialNumber: serialNumber,
+		Subject: pkix.Name{
+			Organization: []string{"Digistorm"},
+		},
+		NotBefore: notBefore,
+		NotAfter:  notAfter,
+
+		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		DNSNames:		[]string{serverAddress},
+	}
+
+	derBytes, err := x509.CreateCertificate(rand.Reader, &template, cert, publicKey(priv), priv)
+	if err != nil {
+		log.Printf("Failed to create certificate: %s", err)
+		log.Fatal(err)
+	}
+
+	certOut, err := os.Create(certPath)
+	if err != nil {
+		log.Printf("failed to open " + certPath + " for writing: %s", err)
+		log.Fatal(err)
+	}
+	pem.Encode(certOut, &pem.Block{Type: "CERTIFICATE", Bytes: derBytes})
+	certOut.Close()
+	log.Print("written cert.pem\n")
+
+	keyOut, err := os.OpenFile(keyPath, os.O_WRONLY | os.O_CREATE | os.O_TRUNC, 0600)
+	if err != nil {
+		log.Print("failed to open " + keyPath + " for writing:", err)
+		log.Fatal(err)
+	}
+	pem.Encode(keyOut, pemBlockForKey(priv))
+	keyOut.Close()
+	log.Print("written key.pem\n")
+
+	//block, _ := pem.Decode(cert)
+	//if block == nil {
+	//	panic("failed to parse certificate PEM")
+	//}
+	//parsedCert, err := x509.ParseCertificate(cert)
+	//if err != nil {
+	//	panic("failed to parse certificate: " + err.Error())
+	//}
+	//
+	//fmt.Println(parsedCert)
+
+
+
+
+
+	//// Check if the cert files are available.
+	//err = httpscerts.Check(certPath, keyPath)
+	//// If they are not available, generate new ones.
+	//if err != nil {
+	//	err = httpscerts.Generate(certPath, keyPath, serverAddress)
+	//	if err != nil {
+	//		log.Fatal("Error: Couldn't create https certs.")
+	//	}
+	//}
+	//
+	//http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+	//	handleAuthMiddleware(w, r, handleRoot)
+	//})
+	//http.HandleFunc("/task", func(w http.ResponseWriter, r *http.Request) {
+	//	handleAuthMiddleware(w, r, handleTask)
+	//})
+	//fmt.Println(fmt.Sprintf("Starting server on address: %s", serverAddress))
+	//http.ListenAndServeTLS(serverAddress, certPath, keyPath, nil)
 }
 
 func (p *program) Start(s service.Service) error {
